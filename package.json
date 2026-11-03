@@ -1,0 +1,37 @@
+{
+  "name": "ddos-demo-server",
+  "version": "1.2.0",
+  "description": "Realistic Node.js/Express server for university DDoS demonstration with live Socket.io dashboard, resource exhaustion shutdown, and IP-changing rate limit bypass",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test-server.js",
+    "attack": "node demo-attack.js",
+    "attack:change-ip": "node demo-attack.js --change-ip",
+    "attack:change-ip:heavy": "node demo-attack.js --change-ip --endpoint /api/data",
+    "attack:botnet": "node demo-attack.js --botnet",
+    "attack:bypass": "node demo-attack.js --change-ip",
+    "attack:heavy": "node demo-attack.js --endpoint /api/data"
+  },
+  "keywords": [
+    "ddos",
+    "demo",
+    "rate-limiting",
+    "socket.io",
+    "express",
+    "ip-changing",
+    "ip-spoofing",
+    "resource-exhaustion"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.1"
+  }
+}

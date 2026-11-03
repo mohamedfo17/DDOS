@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DDoS Attack & Defense Live Monitor</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- Socket.io client -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            defense: '#10b981',
+            attack: '#ef4444',
+            cyberdark: '#0b0f19',
+            panel: '#1e293b'
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #0b0f19;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+    .glow-red {
+      box-shadow: 0 0 25px rgba(239, 68, 68, 0.4);
+    }
+    .glow-green {
+      box-shadow: 0 0 25px rgba(16, 185, 129, 0.35);
+    }
+    .glow-critical {
+      box-shadow: 0 0 45px rgba(239, 68, 68, 0.85);
+      animation: pulse-border 1s infinite alternate;
+    }
+    @keyframes pulse-border {
+      0% { border-color: #ef4444; }
+      100% { border-color: #b91c1c; }
+    }
+  </style>
+</head>
+<body class="min-h-screen p-4 md:p-6 flex flex-col justify-between">
+
+  <!-- CRASH OVERLAY MODAL (Hidden by default, shown when server shuts down) -->
+  <div id="crashOverlay" class="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 hidden">
+    <div class="max-w-2xl w-full bg-slate-900 border-2 border-red-600 rounded-2xl p-6 md:p-8 shadow-2xl glow-critical text-center">
+      <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-red-950 border border-red-500 flex items-center justify-center text-3xl animate-bounce">
+        💀
+      </div>
+      <h2 class="text-3xl font-black text-red-500 uppercase tracking-wider mb-2">
+        Target Server Has Crashed (Went Down)
+      </h2>
+      <p id="crashReasonText" class="text-base text-red-200 font-mono mb-4">
+        Out Of Memory (OOM) / Resource Ceiling Breached
+      </p>
+
+      <!-- Educational Lesson Box -->
+      <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 text-left text-xs space-y-2 mb-6">
+        <div class="text-amber-400 font-bold flex items-center gap-1.5">
+          <span>💡</span> University Lesson: Why Did Rate Limiting Fail?
+        </div>
+        <p class="text-slate-300">
+          The attacker used the <strong>IP Changing Option</strong> (<code class="text-emerald-400">--change-ip</code>).
+        </p>
+        <p class="text-slate-400">
+          Because each attack request arrived with a brand new source IP, <code class="text-indigo-400">express-rate-limit</code> 
+          treated each connection as a distinct, innocent user. No single IP hit the 20-request threshold, 
+          allowing <strong>100% of the flood</strong> to reach application memory until the process ran out of resources and was terminated by the OS!
+        </p>
+      </div>
+
+      <div class="flex flex-col sm:flex-row items-center justify-center gap-3">
+        <div class="text-xs text-slate-400 font-mono bg-slate-800 px-4 py-2.5 rounded-lg border border-slate-700">
+          To bring server back online: <span class="text-emerald-400 font-bold select-all">npm start</span>
+        </div>
+        <button onclick="dismissCrashOverlay()" class="px-5 py-2.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors">
+          View Disconnected Dashboard
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="max-w-7xl mx-auto w-full">
+    
+    <!-- HEADER -->
+    <header class="flex flex-col md:flex-row items-center justify-between pb-6 mb-6 border-b border-slate-800 gap-4">
+      <div>
+        <div class="flex items-center gap-3">
+          <div id="headerPing" class="w-3 h-3 rounded-full bg-emerald-400 animate-ping"></div>
+          <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight text-white">
+            DDoS Live Telemetry & Defense Dashboard
+          </h1>
+        </div>
+        <p class="text-sm text-slate-400 mt-1">
+          University Demonstration: Layer 7 Flood, Rate-Limiting, IP Changing & Server Resource Exhaustion
+        </p>
+      </div>
+
+      <!-- CONNECTION STATUS & TARGET CONTROLS -->
+      <div class="flex flex-wrap items-center gap-3">
+        
+        <!-- MEMORY LIMIT SELECTOR (Adjust live without restart) -->
+        <div class="flex items-center gap-1.5 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs">
+          <span class="text-slate-400 font-medium">Ceiling:</span>
+          <select id="ceilingSelect" onchange="changeMemoryCeiling(this.value)" class="bg-slate-800 text-amber-400 font-bold rounded px-1.5 py-0.5 outline-none cursor-pointer">
+            <option value="128">128 MB (Fast Crash)</option>
+            <option value="256">256 MB (Quick)</option>
+            <option value="512" selected>512 MB (Presentation Default)</option>
+            <option value="1024">1024 MB (Tank Mode)</option>
+          </select>
+        </div>
+
+        <div id="connectionStatus" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-950 text-amber-400 border border-amber-800">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span>Connecting...</span>
+        </div>
+
+        <!-- TOGGLE PROTECTION BUTTON -->
+        <button id="toggleBtn" onclick="toggleProtection()" 
+          class="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold shadow-lg transition-all transform active:scale-95 bg-red-600 hover:bg-red-500 text-white">
+          <span id="btnIcon">🛡️</span>
+          <span id="btnText">Enable DDoS Protection</span>
+        </button>
+
+        <!-- MANUAL CRASH SIMULATOR BUTTON (FOR PRESENTATION) -->
+        <button onclick="triggerCrash()" title="Simulate immediate resource crash for presentation"
+          class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-red-950 hover:border-red-600 border border-slate-700 text-slate-300 transition-colors">
+          <span>💥</span>
+          <span>Simulate Crash</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- STATUS BANNER -->
+    <div id="statusBanner" class="mb-6 p-4 rounded-xl border border-red-800 bg-red-950/60 transition-all glow-red">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <span id="bannerIcon" class="text-2xl">⚠️</span>
+          <div>
+            <div id="bannerTitle" class="text-lg font-bold text-red-300">
+              PROTECTION DISABLED (UNDEFENDED TARGET)
+            </div>
+            <div id="bannerDesc" class="text-xs text-red-200">
+              The Express server is accepting all incoming requests without rate limiting. High request volumes will saturate memory until the process shuts down.
+            </div>
+          </div>
+        </div>
+        <div class="text-right text-xs text-slate-400 font-mono">
+          <div>Policy: <span id="policyRule" class="text-slate-200 font-semibold">Max 20 req / 10s per IP</span></div>
+          <div>Memory Ceiling: <span id="memCeilingText" class="text-amber-400 font-bold">512 MB</span> (Auto-Shutdown)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATS CARDS GRID -->
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+      
+      <!-- Total RPS -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Traffic</span>
+        <div class="mt-2 flex items-baseline gap-1">
+          <span id="statRps" class="text-3xl font-extrabold text-white">0</span>
+          <span class="text-xs text-slate-400">req/s</span>
+        </div>
+        <div class="mt-2 text-[11px] text-slate-500 font-mono">
+          Total: <span id="statTotalReqs">0</span>
+        </div>
+      </div>
+
+      <!-- Blocked Requests (429s) -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Blocked (429s)</span>
+        <div class="mt-2 flex items-baseline gap-1">
+          <span id="statBlocked" class="text-3xl font-extrabold text-red-400">0</span>
+          <span class="text-xs text-slate-400">dropped</span>
+        </div>
+        <div class="mt-2 text-[11px] text-slate-500 font-mono">
+          Since active: <span id="statBlockedActive">0</span>
+        </div>
+      </div>
+
+      <!-- Memory Limit Ceiling Gauge (Shows progress toward OOM Crash) -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between relative overflow-hidden">
+        <span class="text-xs font-medium text-amber-400 uppercase tracking-wider flex items-center justify-between">
+          <span>Memory Ceiling</span>
+          <span id="memPercentBadge" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">0%</span>
+        </span>
+        <div class="mt-2 flex items-baseline gap-1">
+          <span id="statProcRam" class="text-3xl font-extrabold text-white">0</span>
+          <span class="text-xs text-slate-400">/ <span id="maxMemLabel">512</span> MB</span>
+        </div>
+        <!-- Progress bar toward crash -->
+        <div class="w-full bg-slate-800 h-2 rounded-full mt-2 overflow-hidden">
+          <div id="memCeilingBar" class="bg-emerald-400 h-full transition-all duration-300" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- CPU Usage -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">CPU Usage</span>
+        <div class="mt-2 flex items-baseline gap-1">
+          <span id="statCpu" class="text-3xl font-extrabold text-emerald-400">0.0</span>
+          <span class="text-xs text-slate-400">%</span>
+        </div>
+        <div class="w-full bg-slate-800 h-1.5 rounded-full mt-2 overflow-hidden">
+          <div id="cpuBar" class="bg-emerald-400 h-full transition-all duration-300" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Event Loop Lag -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Event Loop Delay</span>
+        <div class="mt-2 flex items-baseline gap-1">
+          <span id="statLag" class="text-3xl font-extrabold text-emerald-400">0</span>
+          <span class="text-xs text-slate-400">ms</span>
+        </div>
+        <div class="mt-2 text-[11px] text-slate-500">
+          Node thread lag
+        </div>
+      </div>
+
+      <!-- Active In-Flight Connections -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between">
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">In-Flight Conns</span>
+        <div class="mt-2 flex items-baseline gap-1">
+          <span id="statActive" class="text-3xl font-extrabold text-purple-400">0</span>
+          <span class="text-xs text-slate-400">sockets</span>
+        </div>
+        <div class="mt-2 text-[11px] text-slate-500">
+          Limit: <span id="maxSocketsLabel">2000</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- CHARTS SECTION -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+      
+      <!-- Chart 1: Real-time Traffic Timeline (RPS & Blocked) -->
+      <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg flex flex-col">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-base font-bold text-white">Live Traffic History (Last 30 Seconds)</h2>
+            <p class="text-xs text-slate-400">Total incoming requests vs. Rate-limited 429 rejections</p>
+          </div>
+          <div class="flex items-center gap-4 text-xs">
+            <span class="flex items-center gap-1.5 text-indigo-400 font-semibold">
+              <span class="w-3 h-3 rounded-full bg-indigo-500"></span> Total RPS
+            </span>
+            <span class="flex items-center gap-1.5 text-red-400 font-semibold">
+              <span class="w-3 h-3 rounded-full bg-red-500"></span> Blocked (429)
+            </span>
+          </div>
+        </div>
+        <div class="relative flex-1 min-h-[260px]">
+          <canvas id="trafficChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Chart 2: Per-IP Attacker Breakdown Bar Chart -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg flex flex-col">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-base font-bold text-white">Source IP Distribution</h2>
+            <p class="text-xs text-slate-400">Requests/sec per attacking container or client</p>
+          </div>
+          <span id="uniqueIpCount" class="px-2 py-0.5 rounded text-xs font-mono bg-slate-800 text-slate-300">
+            0 IPs
+          </span>
+        </div>
+        <div class="relative flex-1 min-h-[260px]">
+          <canvas id="ipChart"></canvas>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- BOTTOM ROW: SYSTEM VITALS, ATTACK SIMULATOR, AND ACTIVITY LOG -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+      
+      <!-- Hardware Load History -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h2 class="text-base font-bold text-white">Resource Utilization (%)</h2>
+            <p class="text-xs text-slate-400">Memory buildup toward shutdown threshold</p>
+          </div>
+          <div class="flex items-center gap-3 text-xs">
+            <span class="flex items-center gap-1.5 text-emerald-400 font-semibold">
+              <span class="w-3 h-3 rounded-full bg-emerald-500"></span> CPU %
+            </span>
+            <span class="flex items-center gap-1.5 text-amber-400 font-semibold">
+              <span class="w-3 h-3 rounded-full bg-amber-500"></span> Memory %
+            </span>
+          </div>
+        </div>
+        <div class="relative min-h-[170px]">
+          <canvas id="hardwareChart"></canvas>
+        </div>
+      </div>
+
+      <!-- IN-BROWSER ATTACK SIMULATOR -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <h2 class="text-base font-bold text-white">Interactive Attack Launcher</h2>
+            <span id="attackStatusBadge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">Idle</span>
+          </div>
+          <p class="text-xs text-slate-400 mb-3">Launch test floods directly to demo rate-limit bypass:</p>
+
+          <div class="space-y-2">
+            <!-- Static IP Attack Button -->
+            <button onclick="startBrowserAttack(false)" id="staticAttackBtn"
+              class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 transition-all">
+              <span>👤 1. Static IP Attack</span>
+              <span class="text-[10px] text-red-400 bg-red-950/60 px-1.5 py-0.5 rounded">Blocked by 429</span>
+            </button>
+
+            <!-- IP Changing Attack Button -->
+            <button onclick="startBrowserAttack(true)" id="changingAttackBtn"
+              class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-bold bg-amber-950 hover:bg-amber-900 border border-amber-600 text-amber-300 transition-all glow-red">
+              <span>🔥 2. IP Changing Option</span>
+              <span class="text-[10px] text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded font-mono">Surpasses Limits</span>
+            </button>
+
+            <!-- Stop Attack Button -->
+            <button onclick="stopBrowserAttack()" id="stopAttackBtn" disabled
+              class="w-full px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-950 hover:bg-slate-900 text-slate-500 border border-slate-800 transition-all">
+              ⏹️ Stop Attack
+            </button>
+          </div>
+        </div>
+
+        <div class="mt-3 pt-2.5 border-t border-slate-800 text-[11px] font-mono text-slate-400">
+          CLI Command: <span class="text-emerald-400 select-all font-bold">npm run attack:change-ip</span>
+        </div>
+      </div>
+
+      <!-- LIVE EVENT LOG & CLI COMMANDS -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-lg flex flex-col justify-between">
+        <div>
+          <h2 class="text-base font-bold text-white mb-1">Defense Activity Log</h2>
+          <p class="text-xs text-slate-400 mb-2">Live security telemetry events</p>
+          <div id="eventLog" class="h-36 overflow-y-auto space-y-1.5 text-xs font-mono pr-2">
+            <div class="text-slate-500">[System] Initialized live telemetry stream.</div>
+          </div>
+        </div>
+
+        <div class="mt-2 pt-2 border-t border-slate-800 text-xs">
+          <div class="text-[11px] text-slate-400 flex items-center justify-between">
+            <span>Terminal IP-Changing Attack:</span>
+            <span class="text-[10px] text-amber-400 font-mono">--change-ip</span>
+          </div>
+          <div class="bg-slate-950 p-1.5 rounded text-[11px] font-mono text-emerald-400 select-all overflow-x-auto mt-1">
+            node demo-attack.js --change-ip
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- FOOTER -->
+  <footer class="max-w-7xl mx-auto w-full text-center text-xs text-slate-500 py-3 border-t border-slate-800/60 mt-4">
+    University DDoS Demonstration Server &bull; Resource Exhaustion & IP Changing Bypass Demonstration
+  </footer>
+
+  <!-- SCRIPT LOGIC -->
+  <script>
+    // State variables
+    let isProtectionOn = false;
+    let maxMemoryMb = 512;
+    const MAX_DATA_POINTS = 30; // 30 seconds history
+
+    // In-browser attack simulation variables
+    let browserAttackRunning = false;
+    let browserAttackTimer = null;
+
+    // Connect to Socket.io (works both when served from same host or external frontend)
+    const socket = io();
+
+    // DOM Elements
+    const connEl = document.getElementById('connectionStatus');
+    const headerPing = document.getElementById('headerPing');
+    const toggleBtn = document.getElementById('toggleBtn');
+    const btnIcon = document.getElementById('btnIcon');
+    const btnText = document.getElementById('btnText');
+    const statusBanner = document.getElementById('statusBanner');
+    const bannerTitle = document.getElementById('bannerTitle');
+    const bannerDesc = document.getElementById('bannerDesc');
+    const bannerIcon = document.getElementById('bannerIcon');
+    const eventLog = document.getElementById('eventLog');
+    const crashOverlay = document.getElementById('crashOverlay');
+    const crashReasonText = document.getElementById('crashReasonText');
+    const ceilingSelect = document.getElementById('ceilingSelect');
+    const attackStatusBadge = document.getElementById('attackStatusBadge');
+    const stopAttackBtn = document.getElementById('stopAttackBtn');
+
+    function logEvent(msg, type = 'info') {
+      const time = new Date().toLocaleTimeString();
+      const div = document.createElement('div');
+      div.className = type === 'alert' ? 'text-red-400' : (type === 'success' ? 'text-emerald-400' : (type === 'warn' ? 'text-amber-400' : 'text-slate-400'));
+      div.textContent = `[${time}] ${msg}`;
+      eventLog.prepend(div);
+      if (eventLog.children.length > 25) {
+        eventLog.removeChild(eventLog.lastChild);
+      }
+    }
+
+    function dismissCrashOverlay() {
+      crashOverlay.classList.add('hidden');
+    }
+
+    // Update UI based on Protection State
+    function updateProtectionUI(enabled, blockedCount = 0) {
+      isProtectionOn = enabled;
+      if (enabled) {
+        toggleBtn.className = "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold shadow-lg transition-all transform active:scale-95 bg-emerald-600 hover:bg-emerald-500 text-white";
+        btnIcon.textContent = "🛡️";
+        btnText.textContent = "Disable Protection";
+
+        statusBanner.className = "mb-6 p-4 rounded-xl border border-emerald-800 bg-emerald-950/60 transition-all glow-green";
+        bannerTitle.textContent = "PROTECTION ACTIVE (RATE LIMITING ENABLED)";
+        bannerTitle.className = "text-lg font-bold text-emerald-300";
+        bannerDesc.textContent = "Rate limiting drops requests exceeding 20 req/10s per IP. Note: Attackers using the IP Changing option (--change-ip) will still bypass this!";
+        bannerDesc.className = "text-xs text-emerald-200";
+        bannerIcon.textContent = "🛡️";
+      } else {
+        toggleBtn.className = "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold shadow-lg transition-all transform active:scale-95 bg-red-600 hover:bg-red-500 text-white";
+        btnIcon.textContent = "⚠️";
+        btnText.textContent = "Enable Protection";
+
+        statusBanner.className = "mb-6 p-4 rounded-xl border border-red-800 bg-red-950/60 transition-all glow-red";
+        bannerTitle.textContent = "PROTECTION DISABLED (UNDEFENDED TARGET)";
+        bannerTitle.className = "text-lg font-bold text-red-300";
+        bannerDesc.textContent = "The Express server is accepting all incoming requests without rate limiting. High request volumes will saturate memory until the process shuts down.";
+        bannerDesc.className = "text-xs text-red-200";
+        bannerIcon.textContent = "⚠️";
+      }
+    }
+
+    // Toggle Protection via API
+    async function toggleProtection() {
+      try {
+        toggleBtn.disabled = true;
+        const res = await fetch('/api/toggle-protection', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: !isProtectionOn })
+        });
+        const data = await res.json();
+        updateProtectionUI(data.protectionEnabled, data.blockedSinceProtection);
+        logEvent(data.message, data.protectionEnabled ? 'success' : 'alert');
+      } catch (err) {
+        console.error('Failed to toggle protection:', err);
+        logEvent('Failed to toggle protection: ' + err.message, 'alert');
+      } finally {
+        toggleBtn.disabled = false;
+      }
+    }
+
+    // Change memory limit dynamically from dropdown
+    async function changeMemoryCeiling(val) {
+      try {
+        const mb = parseInt(val, 10);
+        const res = await fetch('/api/set-limits', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ maxMemoryMb: mb })
+        });
+        const data = await res.json();
+        applyNewLimits(data.maxMemoryMb, data.maxConcurrentConn);
+        logEvent(`Memory ceiling updated to ${data.maxMemoryMb} MB`, 'success');
+      } catch (e) {
+        logEvent('Failed to update limits: ' + e.message, 'alert');
+      }
+    }
+
+    function applyNewLimits(mb, sockets) {
+      maxMemoryMb = mb;
+      document.getElementById('maxMemLabel').textContent = mb;
+      document.getElementById('memCeilingText').textContent = mb + ' MB';
+      if (ceilingSelect) {
+        ceilingSelect.value = String(mb);
+      }
+      if (sockets) {
+        document.getElementById('maxSocketsLabel').textContent = sockets;
+      }
+    }
+
+    // Trigger instant crash (for instructor presentation)
+    async function triggerCrash() {
+      if (!confirm('Simulate immediate fatal resource exhaustion crash (process will exit)?')) return;
+      try {
+        await fetch('/api/crash', { method: 'POST' });
+        logEvent('Manual crash signal sent to server...', 'alert');
+      } catch (e) {
+        logEvent('Crash initiated.', 'alert');
+      }
+    }
+
+    // ==========================================
+    // IN-BROWSER ATTACK SIMULATOR (GUI DEMO)
+    // ==========================================
+    function generateRandomBrowserIp() {
+      const o1 = Math.floor(Math.random() * 210) + 11;
+      const o2 = Math.floor(Math.random() * 255);
+      const o3 = Math.floor(Math.random() * 255);
+      const o4 = Math.floor(Math.random() * 254) + 1;
+      return `${o1}.${o2}.${o3}.${o4}`;
+    }
+
+    function startBrowserAttack(withIpChanging) {
+      stopBrowserAttack();
+      browserAttackRunning = true;
+      stopAttackBtn.disabled = false;
+      stopAttackBtn.className = "w-full px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-900 hover:bg-red-800 text-white border border-red-700 transition-all cursor-pointer";
+      
+      attackStatusBadge.textContent = withIpChanging ? "Changing IPs Active" : "Static IP Active";
+      attackStatusBadge.className = withIpChanging 
+        ? "text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-mono font-bold animate-pulse"
+        : "text-[10px] px-2 py-0.5 rounded bg-amber-950 text-amber-400 font-mono font-bold";
+
+      logEvent(`In-browser flood started: ${withIpChanging ? 'IP CHANGING OPTION (Surpassing limits)' : 'STATIC IP (Subject to rate limits)'}`, withIpChanging ? 'warn' : 'info');
+
+      // Send batches of concurrent requests
+      const batchSize = 15;
+      browserAttackTimer = setInterval(() => {
+        if (!browserAttackRunning) return;
+        for (let i = 0; i < batchSize; i++) {
+          const headers = {};
+          if (withIpChanging) {
+            const ip = generateRandomBrowserIp();
+            headers['X-Attacker-IP'] = ip;
+            headers['X-Forwarded-For'] = ip;
+          }
+          fetch('/', { headers }).catch(() => {});
+        }
+      }, 50);
+    }
+
+    function stopBrowserAttack() {
+      browserAttackRunning = false;
+      if (browserAttackTimer) {
+        clearInterval(browserAttackTimer);
+        browserAttackTimer = null;
+      }
+      stopAttackBtn.disabled = true;
+      stopAttackBtn.className = "w-full px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-950 text-slate-500 border border-slate-800";
+      attackStatusBadge.textContent = "Idle";
+      attackStatusBadge.className = "text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-mono";
+    }
+
+    // ==========================================
+    // CHART.JS INITIALIZATION
+    // ==========================================
+
+    const timeLabels = Array(MAX_DATA_POINTS).fill('');
+
+    // 1. Traffic Chart (Total RPS & Blocked 429s)
+    const trafficCtx = document.getElementById('trafficChart').getContext('2d');
+    const trafficChart = new Chart(trafficCtx, {
+      type: 'line',
+      data: {
+        labels: [...timeLabels],
+        datasets: [
+          {
+            label: 'Total Requests / sec',
+            data: Array(MAX_DATA_POINTS).fill(0),
+            borderColor: '#6366f1',
+            backgroundColor: 'rgba(99, 102, 241, 0.15)',
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Blocked / sec (429)',
+            data: Array(MAX_DATA_POINTS).fill(0),
+            borderColor: '#ef4444',
+            backgroundColor: 'rgba(239, 68, 68, 0.25)',
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2,
+            pointRadius: 0
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 300 },
+        scales: {
+          x: { display: false },
+          y: {
+            beginAtZero: true,
+            suggestedMax: 20,
+            grid: { color: '#1e293b' },
+            ticks: { color: '#94a3b8', font: { size: 10 } }
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: { mode: 'index', intersect: false }
+        }
+      }
+    });
+
+    // 2. IP Breakdown Bar Chart (Horizontal)
+    const ipCtx = document.getElementById('ipChart').getContext('2d');
+    const ipChart = new Chart(ipCtx, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Requests / sec',
+          data: [],
+          backgroundColor: [
+            '#ef4444', '#f97316', '#f59e0b', '#84cc16',
+            '#06b6d4', '#6366f1', '#ec4899', '#a855f7'
+          ],
+          borderRadius: 4
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 250 },
+        scales: {
+          x: {
+            beginAtZero: true,
+            suggestedMax: 10,
+            grid: { color: '#1e293b' },
+            ticks: { color: '#94a3b8', font: { size: 10 } }
+          },
+          y: {
+            grid: { display: false },
+            ticks: { color: '#cbd5e1', font: { size: 11, family: 'monospace' } }
+          }
+        },
+        plugins: {
+          legend: { display: false }
+        }
+      }
+    });
+
+    // 3. Hardware Chart (CPU & Memory Ceiling %)
+    const hardwareCtx = document.getElementById('hardwareChart').getContext('2d');
+    const hardwareChart = new Chart(hardwareCtx, {
+      type: 'line',
+      data: {
+        labels: [...timeLabels],
+        datasets: [
+          {
+            label: 'CPU Usage %',
+            data: Array(MAX_DATA_POINTS).fill(0),
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Memory Ceiling %',
+            data: Array(MAX_DATA_POINTS).fill(0),
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245, 158, 11, 0.1)',
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2,
+            pointRadius: 0
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 300 },
+        scales: {
+          x: { display: false },
+          y: {
+            min: 0,
+            max: 100,
+            grid: { color: '#1e293b' },
+            ticks: {
+              color: '#94a3b8',
+              font: { size: 10 },
+              callback: (val) => val + '%'
+            }
+          }
+        },
+        plugins: {
+          legend: { display: false }
+        }
+      }
+    });
+
+    // ==========================================
+    // SOCKET.IO EVENT HANDLERS
+    // ==========================================
+    let prevBlockedCount = 0;
+
+    socket.on('connect', () => {
+      connEl.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800";
+      connEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span><span>Target Online</span>';
+      headerPing.className = "w-3 h-3 rounded-full bg-emerald-400 animate-ping";
+      logEvent('Connected to live Socket.io telemetry stream.', 'success');
+      crashOverlay.classList.add('hidden');
+    });
+
+    socket.on('disconnect', () => {
+      connEl.className = "flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-red-950 text-red-400 border border-red-800";
+      connEl.innerHTML = '<span class="w-2 h-2 rounded-full bg-red-400"></span><span>SERVER DOWN</span>';
+      headerPing.className = "w-3 h-3 rounded-full bg-red-500";
+      logEvent('CRITICAL: Lost connection to target server (Server process died).', 'alert');
+      stopBrowserAttack();
+      // Show crash overlay
+      crashOverlay.classList.remove('hidden');
+    });
+
+    socket.on('server-crash', (data) => {
+      crashReasonText.textContent = data.reason;
+      crashOverlay.classList.remove('hidden');
+      stopBrowserAttack();
+      logEvent(`💥 FATAL SERVER CRASH: ${data.reason}`, 'alert');
+    });
+
+    socket.on('initial-state', (data) => {
+      updateProtectionUI(data.protectionEnabled, data.blockedSinceProtection);
+      prevBlockedCount = data.blockedSinceProtection || 0;
+      if (data.maxMemoryMb) {
+        applyNewLimits(data.maxMemoryMb, data.maxConcurrentConnections);
+      }
+    });
+
+    socket.on('limits-updated', (data) => {
+      applyNewLimits(data.maxMemoryMb, data.maxConcurrentConn);
+    });
+
+    socket.on('protection-change', (data) => {
+      updateProtectionUI(data.protectionEnabled, data.blockedSinceProtection);
+    });
+
+    socket.on('stats', (data) => {
+      // 1. Update Numbers
+      document.getElementById('statRps').textContent = data.totalRps.toLocaleString();
+      document.getElementById('statTotalReqs').textContent = data.totalRequestsCumulative.toLocaleString();
+      document.getElementById('statBlocked').textContent = data.blockedRequests.toLocaleString();
+      document.getElementById('statBlockedActive').textContent = data.blockedRequests.toLocaleString();
+      document.getElementById('statCpu').textContent = data.cpuPercent.toFixed(1);
+      document.getElementById('statProcRam').textContent = data.processRssMb;
+      document.getElementById('statLag').textContent = data.eventLoopLagMs;
+      document.getElementById('statActive').textContent = data.activeConnections;
+
+      // Update Memory Ceiling Gauge
+      const memPercent = Math.min(100, data.memoryCeilingPercent || ((data.processRssMb / maxMemoryMb) * 100));
+      const memCeilingBar = document.getElementById('memCeilingBar');
+      const memPercentBadge = document.getElementById('memPercentBadge');
+      memCeilingBar.style.width = memPercent + '%';
+      memPercentBadge.textContent = memPercent.toFixed(0) + '%';
+
+      if (memPercent > 85) {
+        memCeilingBar.className = 'bg-red-500 h-full transition-all duration-300 animate-pulse';
+        memPercentBadge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-red-950 text-red-400 font-bold border border-red-800';
+      } else if (memPercent > 60) {
+        memCeilingBar.className = 'bg-amber-400 h-full transition-all duration-300';
+        memPercentBadge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-400 font-bold';
+      } else {
+        memCeilingBar.className = 'bg-emerald-400 h-full transition-all duration-300';
+        memPercentBadge.className = 'text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300';
+      }
+
+      // Update CPU visual color and width
+      const cpuBar = document.getElementById('cpuBar');
+      cpuBar.style.width = Math.min(100, data.cpuPercent) + '%';
+      const cpuStat = document.getElementById('statCpu');
+      if (data.cpuPercent > 75) {
+        cpuBar.className = 'bg-red-500 h-full transition-all duration-300';
+        cpuStat.className = 'text-3xl font-extrabold text-red-500';
+      } else if (data.cpuPercent > 40) {
+        cpuBar.className = 'bg-amber-400 h-full transition-all duration-300';
+        cpuStat.className = 'text-3xl font-extrabold text-amber-400';
+      } else {
+        cpuBar.className = 'bg-emerald-400 h-full transition-all duration-300';
+        cpuStat.className = 'text-3xl font-extrabold text-emerald-400';
+      }
+
+      // Event loop delay color
+      const lagStat = document.getElementById('statLag');
+      if (data.eventLoopLagMs > 200) {
+        lagStat.className = 'text-3xl font-extrabold text-red-500 animate-pulse';
+      } else if (data.eventLoopLagMs > 50) {
+        lagStat.className = 'text-3xl font-extrabold text-amber-400';
+      } else {
+        lagStat.className = 'text-3xl font-extrabold text-emerald-400';
+      }
+
+      // 2. Push to Traffic Timeline Chart
+      const blockedThisSecond = Math.max(0, data.blockedRequests - prevBlockedCount);
+      prevBlockedCount = data.blockedRequests;
+
+      trafficChart.data.datasets[0].data.shift();
+      trafficChart.data.datasets[0].data.push(data.totalRps);
+      trafficChart.data.datasets[1].data.shift();
+      trafficChart.data.datasets[1].data.push(blockedThisSecond);
+      trafficChart.update('none');
+
+      // 3. Update Hardware Chart (CPU and Memory Ceiling %)
+      hardwareChart.data.datasets[0].data.shift();
+      hardwareChart.data.datasets[0].data.push(data.cpuPercent);
+      hardwareChart.data.datasets[1].data.shift();
+      hardwareChart.data.datasets[1].data.push(memPercent);
+      hardwareChart.update('none');
+
+      // 4. Update IP Breakdown Chart
+      const ipEntries = Object.entries(data.rpsByIp || {});
+      ipEntries.sort((a, b) => b[1] - a[1]);
+      
+      const topIps = ipEntries.slice(0, 8); // Top 8 attacking IPs
+      document.getElementById('uniqueIpCount').textContent = `${ipEntries.length} Unique IPs`;
+
+      ipChart.data.labels = topIps.map(e => e[0]);
+      ipChart.data.datasets[0].data = topIps.map(e => e[1]);
+      ipChart.update('none');
+
+      // Alerts
+      if (memPercent > 85) {
+        logEvent(`MEMORY WARNING: ${data.processRssMb}MB / ${maxMemoryMb}MB (${memPercent.toFixed(0)}%). Crash imminent!`, 'alert');
+      } else if (!isProtectionOn && data.totalRps > 100) {
+        logEvent(`HIGH FLOOD DETECTED: ${data.totalRps} req/s! Server undefended.`, 'alert');
+      } else if (isProtectionOn && blockedThisSecond > 0) {
+        logEvent(`Mitigation active: Dropped ${blockedThisSecond} req/s (HTTP 429).`, 'success');
+      }
+    });
+  </script>
+</body>
+</html>
