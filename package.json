@@ -1,7 +1,7 @@
 {
   "name": "ddos-demo-server",
   "version": "1.2.0",
-  "description": "Realistic Node.js/Express server for university DDoS demonstration with live Socket.io dashboard, resource exhaustion shutdown, and IP-changing rate limit bypass",
+  "description": "Realistic Node.js/Express server for Layer 7 DDoS simulation with live Socket.io dashboard, resource exhaustion shutdown, and IP-changing rate limit bypass",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -11,6 +11,8 @@
     "attack:change-ip:heavy": "node demo-attack.js --change-ip --endpoint /api/data",
     "attack:botnet": "node demo-attack.js --botnet",
     "attack:bypass": "node demo-attack.js --change-ip",
+    "attack:turbo": "node demo-attack.js --change-ip --turbo",
+    "attack:turbo:heavy": "node demo-attack.js --change-ip --turbo --endpoint /api/data",
     "attack:heavy": "node demo-attack.js --endpoint /api/data"
   },
   "keywords": [

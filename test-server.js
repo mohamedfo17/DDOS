@@ -66,7 +66,7 @@ async function runTests() {
     console.log('[Test 1] Testing GET /');
     const rootRes = await makeRequest('/');
     assert(rootRes.status === 200, 'GET / returned status 200');
-    assert(rootRes.body && rootRes.body.service === 'University DDoS Demo Server', 'GET / returns expected service info');
+    assert(rootRes.body && rootRes.body.service === 'Layer 7 DDoS Simulation Server', 'GET / returns expected service info');
     assert(rootRes.body.protectionEnabled === false, 'GET / reflects initial protectionEnabled = false');
 
     // 2. Test GET /api/data

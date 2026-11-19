@@ -1,9 +1,9 @@
 /**
  * ============================================================================
- * UNIVERSITY DDOS DEMONSTRATION SERVER
+ * LAYER 7 DDOS SIMULATION ENGINE
  * ============================================================================
  * 
- * Educational Objectives:
+ * Simulation Objectives:
  * 1. Understand Layer 7 (Application Layer) HTTP flood attacks.
  * 2. Observe how single-threaded event loop architectures (like Node.js)
  *    degrade under high request volumes without caching/clustering.
@@ -52,8 +52,7 @@ const RATE_LIMIT_WINDOW_MS = 10 * 1000; // 10 seconds
 const RATE_LIMIT_MAX_REQUESTS = 20;     // 20 requests per IP per window
 
 // Resource Limits (Server shuts down when these limits are breached)
-// Increased to generous levels (512MB, 2000 sockets) so server can survive
-// and demonstrate realistic, gradual resource exhaustion during presentations.
+// Default: 512MB RAM, 2000 sockets.
 let maxMemoryMb = parseInt(process.env.MAX_MEMORY_MB || getCliArg('--memory', '512'), 10);
 let maxConcurrentConn = parseInt(process.env.MAX_CONCURRENT_CONN || getCliArg('--max-conn', '2000'), 10);
 const ENABLE_SERVER_SHUTDOWN = process.env.ENABLE_SHUTDOWN !== 'false'; // Allow server to go down on OOM
@@ -62,15 +61,20 @@ const ENABLE_SERVER_SHUTDOWN = process.env.ENABLE_SHUTDOWN !== 'false'; // Allow
 // When requests are accepted (not blocked by rate limiting), memory accumulates here.
 const memoryPressurePool = [];
 
-// Memory allocation size per accepted request (2KB)
-// At 2,000 req/s, this produces ~4MB/s buildup, giving ~30-60s of presentation runway before crash
-const BYTES_PER_ACCEPTED_REQUEST = 2048; // 2KB
+// Memory allocation size per accepted request (Default 16KB, up from 2KB for responsive simulation)
+// Configurable via --chunk-kb CLI flag, BYTES_PER_REQUEST env var, or dynamically via /api/set-limits
+let bytesPerAcceptedRequest = parseInt(
+  process.env.BYTES_PER_REQUEST || 
+  (getCliArg('--chunk-kb') ? parseInt(getCliArg('--chunk-kb'), 10) * 1024 : null) ||
+  getCliArg('--chunk-size', '16384'), 
+  10
+);
 
 // ==========================================
 // 2. STATE & TELEMETRY TRACKERS (In-Memory)
 // ==========================================
 // Toggleable DDoS mitigation state:
-// Start undefended by default so students can observe the impact of an attack.
+// Start undefended by default to observe the impact of an unmitigated attack.
 let protectionEnabled = false;
 let protectionToggledAt = null;
 
@@ -104,12 +108,15 @@ setInterval(() => {
 }, 100).unref();
 
 // Periodic Natural Memory Drainage / Garbage Collection Simulation
-// Drains ~1MB per second of idle buffer pressure if traffic slows down
+// Drains ~1.5MB per second of idle buffer pressure if traffic slows down
 setInterval(() => {
   if (memoryPressurePool.length > 0) {
-    // Drain up to 500 chunks (~1MB) every second
-    const drainCount = Math.min(500, memoryPressurePool.length);
-    memoryPressurePool.splice(0, drainCount);
+    const drainBytesTarget = 1.5 * 1024 * 1024; // 1.5 MB/sec
+    let drainedBytes = 0;
+    while (memoryPressurePool.length > 0 && drainedBytes < drainBytesTarget) {
+      const chunk = memoryPressurePool.shift();
+      drainedBytes += (chunk ? chunk.length : 0);
+    }
   }
 }, 1000).unref();
 
@@ -386,11 +393,16 @@ app.use(dynamicProtectionMiddleware);
 
 // Middleware that simulates server memory pressure for ACCEPTED requests
 // If rate-limited (429), this is NEVER reached, so rate limiting protects memory!
-// But if attackers rotate their IP, every request is accepted, causing memory to build up gradually!
+// But if attackers rotate their IP, every request is accepted, causing memory to build up rapidly!
 app.use((req, res, next) => {
-  // Allocate a 2KB buffer chunk for each accepted request (simulating session state / packet buffers)
+  // Check if request specifies custom simulation attack intensity/weight (in KB)
+  const headerIntensity = parseInt(req.headers['x-attack-intensity'] || '0', 10);
+  const allocSize = (headerIntensity > 0 && headerIntensity <= 128) 
+    ? headerIntensity * 1024 
+    : bytesPerAcceptedRequest;
+
   if (req.path === '/' || req.path === '/api/data') {
-    memoryPressurePool.push(Buffer.alloc(BYTES_PER_ACCEPTED_REQUEST));
+    memoryPressurePool.push(Buffer.alloc(allocSize));
     checkResourceLimits();
   }
   next();
@@ -408,7 +420,7 @@ app.use((req, res, next) => {
  */
 app.get('/', (req, res) => {
   res.json({
-    service: 'University DDoS Demo Server',
+    service: 'Layer 7 DDoS Simulation Server',
     status: 'online',
     path: '/',
     description: 'Target endpoint. Under DDoS flood, this server will struggle when unprotected.',
@@ -449,7 +461,7 @@ app.get('/api/data', (req, res) => {
       clientIp: getClientIp(req),
       data: [
         { id: 1, item: 'Research Dataset Alpha', sizeKb: 142 },
-        { id: 2, item: 'Student Registry Records', sizeKb: 890 },
+        { id: 2, item: 'User Account Records', sizeKb: 890 },
         { id: 3, item: 'Exam Grades Database', sizeKb: 54 }
       ]
     });
@@ -506,18 +518,23 @@ app.post('/api/set-limits', (req, res) => {
   if (typeof req.body.maxConcurrentConn === 'number' && req.body.maxConcurrentConn >= 50) {
     maxConcurrentConn = Math.round(req.body.maxConcurrentConn);
   }
+  if (typeof req.body.chunkKb === 'number' && req.body.chunkKb >= 1) {
+    bytesPerAcceptedRequest = Math.round(req.body.chunkKb * 1024);
+  }
 
   // Notify dashboard clients
   io.emit('limits-updated', {
     maxMemoryMb: maxMemoryMb,
-    maxConcurrentConn: maxConcurrentConn
+    maxConcurrentConn: maxConcurrentConn,
+    chunkKb: Math.round(bytesPerAcceptedRequest / 1024)
   });
 
   res.json({
     success: true,
     maxMemoryMb: maxMemoryMb,
     maxConcurrentConn: maxConcurrentConn,
-    message: `Resource limits updated: Memory ceiling = ${maxMemoryMb}MB, Concurrency ceiling = ${maxConcurrentConn}`
+    chunkKb: Math.round(bytesPerAcceptedRequest / 1024),
+    message: `Resource limits updated: Memory ceiling = ${maxMemoryMb}MB, Concurrency ceiling = ${maxConcurrentConn}, Chunk size = ${Math.round(bytesPerAcceptedRequest / 1024)}KB`
   });
 });
 
@@ -564,6 +581,7 @@ app.get('/api/stats', (req, res) => {
     ramTotalMb: ram.totalMb,
     processRssMb: ram.processRssMb,
     maxMemoryMb: maxMemoryMb,
+    chunkKb: Math.round(bytesPerAcceptedRequest / 1024),
     memoryCeilingPercent: parseFloat(((ram.processRssMb / maxMemoryMb) * 100).toFixed(1)),
     requestsPerSecondTotal: lastRpsTotal,
     requestsPerSecondByIp: lastRpsByIp,
@@ -607,6 +625,7 @@ io.on('connection', (socket) => {
     ramTotalMb: ram.totalMb,
     maxMemoryMb: maxMemoryMb,
     maxConcurrentConnections: maxConcurrentConn,
+    chunkKb: Math.round(bytesPerAcceptedRequest / 1024),
     isCrashing: isCrashing
   });
 });
