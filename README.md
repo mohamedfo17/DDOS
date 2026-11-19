@@ -308,21 +308,9 @@ npm run attack:change-ip:heavy
 
 The simulation engine serves an integrated real-time operations console at [http://localhost:3000/dashboard](http://localhost:3000/dashboard).
 
-```
-┌──────────────────────────────────────────────────────────────────────────────────┐
-│  🟢 DDoS Live Telemetry & Defense Dashboard                 [512 MB ▼] [🛡️ ON]  │
-├──────────────────────────────────────────────────────────────────────────────────┤
-│  [  Total Traffic  ]  [   Blocked 429   ]  [  Memory Ceiling  ]  [   CPU Usage  ]│
-│       1,450 req/s          1,200 dropped          384 / 512 MB            84.5%  │
-│       Total: 42,000        Since active: 8.4k      [████████░░] 75%       Thread │
-├───────────────────────────────────────────────────────┬──────────────────────────┤
-│  📈 Real-time Traffic Timeline (RPS vs 429 Blocked)    │  📊 Source IP Breakdown  │
-│  ───────────────────────────────────────────────────  │  ──────────────────────  │
-│  2000 ┤        /\                                     │  Bot-Alpha  ████████ 320 │
-│  1000 ┤  /\   /  \    (Green: 200 OK)                 │  Bot-Bravo  ███████  290 │
-│     0 ┼──--\-/----\-- (Red: 429 Blocked)             │  Comp-IoT   ████████ 310 │
-└───────────────────────────────────────────────────────┴──────────────────────────┘
-```
+![NOC Telemetry & Memory Watchdog Console](docs/images/dashboard-watchdog.png)
+
+![Ingress Velocity & Threat Injection Console](docs/images/dashboard-analytics.png)
 
 ### Console Components & Telemetry Widgets
 
